@@ -25,7 +25,6 @@ contract IndexFund is ReentrancyGuard, Ownable {
 
     // Token configuration
     address[] public indexTokens;
-    uint256[] public tokenWeights;
 
     // Swap configuration
     uint24 public constant DEFAULT_FEE_TIER = 10000; // 1%
@@ -68,7 +67,6 @@ contract IndexFund is ReentrancyGuard, Ownable {
         address _balancerVault,
         address _balancerPoolToken,
         address[] memory _indexTokens,
-        uint256[] memory _tokenWeights
     ) Ownable(msg.sender) {
         wethAddress = _wethAddress;
         uniswapRouter = _uniswapRouter;
@@ -80,7 +78,6 @@ contract IndexFund is ReentrancyGuard, Ownable {
         (indexTokens,,) = IVault(_balancerVault).getPoolTokens(balancerPoolId);
         balancerPoolToken = _balancerPoolToken;
         indexTokens = _indexTokens;
-        tokenWeights = _tokenWeights;
 
         for (uint256 i = 0; i < _indexTokens.length; i++) {
             IERC20(_indexTokens[i]).approve(_uniswapRouter, type(uint256).max);
@@ -108,9 +105,10 @@ contract IndexFund is ReentrancyGuard, Ownable {
             assets[i] = IAsset(indexTokens[i]);
         }
 
-        uint256 poolBalanceBefore = IERC20(balancerPoolToken).balanceOf(address(this));
+        //uint256 poolBalanceBefore = IERC20(balancerPoolToken).balanceOf(address(this));
         joinBalancerPool(assets, maxAmountsIn);
-        uint256 poolBalanceAfter = IERC20(balancerPoolToken).balanceOf(address(this));
+        uint256 poolBalance = IERC20(balancerPoolToken).balanceOf(address(this));
+        /**
         uint256 mintedPoolTokens = poolBalanceAfter - poolBalanceBefore;
 
         uint256 sharesIssued;
@@ -120,7 +118,9 @@ contract IndexFund is ReentrancyGuard, Ownable {
             sharesIssued = mintedPoolTokens * totalShares / poolBalanceBefore;
         }
         totalShares += sharesIssued;
-        userShares[msg.sender] += sharesIssued;
+        userShares[msg.sender] += sharesIssued; **/
+
+        IERC20(balancerPoolToken).transfer(msg.sender, poolBalance)
 
         emit Minted(msg.sender, msg.value, sharesIssued);
     }
