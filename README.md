@@ -4,22 +4,14 @@ This project contains the IndexFund contract which facilitates minting and redee
 
 ---
 
-## Foundry
+## Codebase Overview
 
-**Foundry** is a blazing fast, portable and modular toolkit for Ethereum application development written in Rust.
+The core of this project is the `IndexFund` contract (located in `src/IndexFund.sol`). This contract enables minting and redeeming fund shares using ETH. It swaps ETH for index tokens through Uniswap and then joins a Balancer pool with the acquired tokens. Redemption allows users to exit the Balancer pool and swap the underlying tokens back to ETH.
 
-Foundry consists of:
+Other important components include:
 
-- **Forge**: Ethereum testing framework (like Truffle, Hardhat, and DappTools).
-- **Cast**: Swiss army knife for interacting with EVM smart contracts.
-- **Anvil**: Local Ethereum node, akin to Ganache or Hardhat Network.
-- **Chisel**: Fast, utilitarian, and verbose Solidity REPL.
-
----
-
-## Documentation
-
-For more details, visit the [Foundry Book](https://book.getfoundry.sh/).
+- **Testing**: The test suite (`test/IndexFundTest.t.sol`) covers minting and redeeming functionalities and ensures proper interactions with external protocols.
+- **Deployment Script**: The deployment script (`script/Deployer.s.sol`) deploys the contract and integrates with external services like Etherscan for contract verification.
 
 ---
 
@@ -61,10 +53,16 @@ $ anvil
 
 Before deploying, copy the provided `.env.example` file to `.env` and set the required environment variables.
 
-Deploy the IndexFund contract with the following command:
+Deploy the IndexFund contract using the following Makefile command:
 
 ```shell
-$ forge script script/Deployer.s.sol:DeployIndexFund --rpc-url $RPC_URL --private-key $PRIVATE_KEY --broadcast
+make deploy_index_fund
+```
+
+Alternatively, if you want to check the deployment without broadcasting a transaction, run:
+
+```shell
+make check_index_fund
 ```
 
 Ensure that your environment has the variables loaded (see below).
@@ -80,19 +78,3 @@ The deployment and scripts rely on the following environment variables. Refer to
 - `ETHERSCAN_API_KEY`: The Etherscan API key for verifying contracts.
 
 ---
-
-## Additional Commands
-
-### Cast
-
-```shell
-$ cast <subcommand>
-```
-
-### Help
-
-```shell
-$ forge --help
-$ anvil --help
-$ cast --help
-```
