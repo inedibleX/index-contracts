@@ -32,9 +32,8 @@ contract IndexFund is ReentrancyGuard, Ownable {
     uint24 public constant DIVISOR = 10000;
     uint16 public slippageTolerance = 2000; // 20% default
 
-    // User accounting
-    mapping(address => uint256) public userShares;
-    uint256 public totalShares;
+    /// @notice Fee basis points for mint and redeem fees (default: 50 = 0.5%)
+    uint256 public feeBasisPoints = 50;
 
     // Events
     /// @notice Emitted when a user mints fund shares.
@@ -52,6 +51,10 @@ contract IndexFund is ReentrancyGuard, Ownable {
     /// @notice Emitted when the slippage tolerance is updated.
     /// @param newSlippageTolerance The new slippage tolerance value.
     event SlippageToleranceUpdated(uint16 newSlippageTolerance);
+
+    /// @notice Emitted when the fee basis points are updated.
+    /// @param newFeeBasisPoints The new fee basis points.
+    event FeeUpdated(uint256 newFeeBasisPoints);
 
     /// @notice Initializes the IndexFund contract.
     /// @param _wethAddress The address of WETH.
@@ -88,12 +91,14 @@ contract IndexFund is ReentrancyGuard, Ownable {
         }
     }
 
-    /// @notice Mints fund shares by swapping ETH for index tokens and joining the Balancer pool.
-    /// @dev The ETH deposit is divided equally among the index tokens for swapping.
-    /// The pool tokens received determine the shares issued.
+    /// @notice Mints pool tokens (BPT) by swapping ETH for index tokens and joining the Balancer pool.
+    /// @dev The ETH deposit is subject to a 0.5% fee. The remaining amount is divided equally among the index tokens for swapping. The pool tokens received are transferred directly to the sender.
     function mint() external payable nonReentrant {
-        uint256 totalAmount = msg.value;
-        uint256 swapAmount = totalAmount / indexTokens.length;
+        // Calculate fee (0.5% of msg.value)
+        uint256 feeAmount = (msg.value * feeBasisPoints) / DIVISOR;
+        uint256 netDeposit = msg.value - feeAmount;
+
+        uint256 swapAmount = netDeposit / indexTokens.length;
         uint256[] memory maxAmountsIn = new uint256[](indexTokens.length);
         for (uint256 i = 0; i < indexTokens.length; i++) {
             uint256 amountOut = getQuote(wethAddress, indexTokens[i], uint128(swapAmount));
@@ -113,16 +118,9 @@ contract IndexFund is ReentrancyGuard, Ownable {
         uint256 poolBalanceAfter = IERC20(balancerPoolToken).balanceOf(address(this));
         uint256 mintedPoolTokens = poolBalanceAfter - poolBalanceBefore;
 
-        uint256 sharesIssued;
-        if (totalShares == 0) {
-            sharesIssued = mintedPoolTokens;
-        } else {
-            sharesIssued = mintedPoolTokens * totalShares / poolBalanceBefore;
-        }
-        totalShares += sharesIssued;
-        userShares[msg.sender] += sharesIssued;
+        require(IERC20(balancerPoolToken).transfer(msg.sender, mintedPoolTokens), "Transfer of BPT failed");
 
-        emit Minted(msg.sender, msg.value, sharesIssued);
+        emit Minted(msg.sender, netDeposit, mintedPoolTokens);
     }
 
     /// @notice Swaps an input amount of a token for another token via Uniswap V3.
@@ -171,17 +169,10 @@ contract IndexFund is ReentrancyGuard, Ownable {
         return OracleLibrary.getQuoteAtTick(tick, amountIn, tokenIn, tokenOut);
     }
 
-    /// @notice Redeems shares for ETH by exiting the Balancer pool and swapping tokens back to WETH.
-    /// @param sharesToRedeem The number of shares to redeem.
-    function redeem(uint256 sharesToRedeem) external nonReentrant {
-        require(userShares[msg.sender] >= sharesToRedeem, "Insufficient shares.");
-        require(totalShares > 0, "No shares exist.");
-
-        uint256 poolBalance = IERC20(balancerPoolToken).balanceOf(address(this));
-        uint256 poolTokensToRedeem = (poolBalance * sharesToRedeem) / totalShares;
-
-        userShares[msg.sender] -= sharesToRedeem;
-        totalShares -= sharesToRedeem;
+    /// @notice Redeems pool tokens (BPT) for ETH by exiting the Balancer pool and swapping tokens back to WETH.
+    /// @param bptAmount The amount of Balancer pool tokens to redeem.
+    function redeem(uint256 bptAmount) external nonReentrant {
+        require(IERC20(balancerPoolToken).transferFrom(msg.sender, address(this), bptAmount), "Transfer of BPT failed");
 
         uint256 len = indexTokens.length;
         address[] memory tokens = new address[](len);
@@ -193,7 +184,7 @@ contract IndexFund is ReentrancyGuard, Ownable {
             minAmountsOut[i] = 0;
         }
 
-        exitBalancerPool(poolTokensToRedeem, tokens, minAmountsOut);
+        exitBalancerPool(bptAmount, tokens, minAmountsOut);
 
         uint256 totalWETH;
         for (uint256 i = 0; i < len; i++) {
@@ -209,14 +200,18 @@ contract IndexFund is ReentrancyGuard, Ownable {
             }
         }
 
-        if (totalWETH > 0) {
-            IWETH(wethAddress).withdraw(totalWETH);
+        // Calculate redemption fee (0.5% of totalWETH)
+        uint256 feeOnRedeem = (totalWETH * feeBasisPoints) / DIVISOR;
+        uint256 netWETH = totalWETH - feeOnRedeem;
+
+        if (netWETH > 0) {
+            IWETH(wethAddress).withdraw(netWETH);
         }
 
-        (bool success,) = msg.sender.call{value: totalWETH}("");
-        require(success, "ETH transfer failed.");
+        (bool success,) = msg.sender.call{value: netWETH}("");
+        require(success, "ETH transfer failed");
 
-        emit Redeemed(msg.sender, sharesToRedeem, totalWETH);
+        emit Redeemed(msg.sender, bptAmount, netWETH);
     }
 
     /// @notice Joins a Balancer pool with the provided assets and maximum token amounts.
@@ -274,6 +269,13 @@ contract IndexFund is ReentrancyGuard, Ownable {
     function setSlippageTolerance(uint16 newSlippageTolerance) external onlyOwner {
         slippageTolerance = newSlippageTolerance;
         emit SlippageToleranceUpdated(newSlippageTolerance);
+    }
+
+    /// @notice Updates the fee basis points used for mint and redeem fees.
+    /// @param newFeeBasisPoints The new fee basis points (e.g. 50 for 0.5%).
+    function setFeeBasisPoints(uint256 newFeeBasisPoints) external onlyOwner {
+        feeBasisPoints = newFeeBasisPoints;
+        emit FeeUpdated(newFeeBasisPoints);
     }
 
     receive() external payable {}

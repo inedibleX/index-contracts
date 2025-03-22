@@ -6,6 +6,7 @@ import {console2} from "forge-std/console2.sol";
 import {BalancerWeightedPoolDeployer} from "../src/Helpers.sol";
 import {IndexFund} from "../src/IndexFund.sol";
 import {IERC20} from "lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+import {Ownable} from "lib/openzeppelin-contracts/contracts/access/Ownable.sol";
 
 contract IndexFundTest is Test {
     struct IndexTokens {
@@ -28,6 +29,7 @@ contract IndexFundTest is Test {
     // Test accounts
     address alice = address(0x1);
     address bob = address(0x2);
+    address owner = vm.addr(uint256(keccak256(bytes("owner"))));
 
     // contract instance
     BalancerWeightedPoolDeployer balancerWeightedPoolDeployer;
@@ -79,7 +81,9 @@ contract IndexFundTest is Test {
         tokenWeights[6] = 125e15;
         tokenWeights[7] = 125e15;
 
+        vm.startPrank(owner);
         balancerWeightedPoolDeployer = new BalancerWeightedPoolDeployer();
+        vm.stopPrank();
 
         vm.deal(alice, 1000 ether);
         vm.deal(bob, 1000 ether);
@@ -96,6 +100,7 @@ contract IndexFundTest is Test {
             name, symbol, indexTokens, tokenWeights, swapFee, address(this), salt
         );
 
+        vm.startPrank(owner);
         // Create IndexFund with all required parameters
         fundInstance = new IndexFund(
             WETH_ADDRESS,
@@ -106,7 +111,7 @@ contract IndexFundTest is Test {
             indexTokens,
             tokenWeights
         );
-
+        vm.stopPrank();
         return (pool, fundInstance);
     }
 
@@ -128,7 +133,8 @@ contract IndexFundTest is Test {
         console2.log("VAULT BALANCE AFTER MINT");
         _logTokenBalance();
 
-        assertGt(fundInstance.userShares(alice), 0);
+        uint256 bptBalance = IERC20(fundInstance.balancerPoolToken()).balanceOf(alice);
+        assertGt(bptBalance, 0);
     }
 
     function test_redeem() public {
@@ -137,13 +143,15 @@ contract IndexFundTest is Test {
         require(address(fundInstance) != address(0), "IndexFund creation failed");
         vm.startPrank(bob);
         fundInstance.mint{value: 1 ether}();
-        uint256 redeemAmount = fundInstance.userShares(bob);
+        uint256 bptBalance = IERC20(fundInstance.balancerPoolToken()).balanceOf(bob);
+        IERC20(fundInstance.balancerPoolToken()).approve(address(fundInstance), bptBalance);
         uint256 bobEthBalBeforeRedeem = address(bob).balance;
-        fundInstance.redeem(redeemAmount);
+        fundInstance.redeem(bptBalance);
         vm.stopPrank();
         uint256 bobEthBalAfterRedeem = address(bob).balance;
 
-        uint256 diffExpected = 0.98e18;
+        // 3% lost in fees (1 % each on swap and 0.5% each on index fees)
+        uint256 diffExpected = 0.97e18;
         assertGe(bobEthBalAfterRedeem, bobEthBalBeforeRedeem + diffExpected);
     }
 
@@ -153,5 +161,23 @@ contract IndexFundTest is Test {
             uint256 tokenBalance = IERC20(indexTokens[i]).balanceOf(BALANCER_VAULT);
             console2.log("Token balance:", tokenBalance);
         }
+    }
+
+    function test_setFeeBasisPoints() public {
+        (, IndexFund fundInstance) = _createWeightedPoolAndIndexFund();
+        // Check initial fee is 50 basis points (0.5%)
+        assertEq(fundInstance.feeBasisPoints(), 50);
+
+        // Test that owner can change fee
+        uint256 newFee = 100; // 1%
+        vm.startPrank(owner);
+        fundInstance.setFeeBasisPoints(newFee);
+        vm.stopPrank();
+        assertEq(fundInstance.feeBasisPoints(), newFee);
+
+        // Test that non-owner cannot change fee
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
+        fundInstance.setFeeBasisPoints(75);
     }
 }
