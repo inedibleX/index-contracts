@@ -32,7 +32,7 @@ contract DeployIndexFund is Script {
         for (uint256 i = 0; i < 8; i++) {
             weights[i] = 125e15;
         }
-
+/** 
         // Swap fee: 0.0001e18
         uint256 swapFee = 0.0001e18;
 
@@ -51,11 +51,11 @@ contract DeployIndexFund is Script {
             swapFee,
             msg.sender, // setting the deployer as the owner of the pool
             salt
-        );
+        );**/
 
         // Deploy the IndexFund contract passing the pool address as the pool token.
         IndexFund fund =
-            new IndexFund(WETH_ADDRESS, UNISWAP_ROUTER, UNISWAP_FACTORY, BALANCER_VAULT, pool, tokens, weights);
+            new IndexFund(WETH_ADDRESS, UNISWAP_ROUTER, UNISWAP_FACTORY, BALANCER_VAULT, 0x6d3110bfad307A5E1eC8D64434cFf6d273Fc0bEc, tokens, weights);
 
         console.log("Weighted pool deployed at:", pool);
         console.log("IndexFund deployed at:", address(fund));
