@@ -14,7 +14,7 @@ contract DeployIndexFund is Script {
         address WETH_ADDRESS = 0x4200000000000000000000000000000000000006;
         address UNISWAP_ROUTER = 0x2626664c2603336E57B271c5C0b26F421741e481;
         address UNISWAP_FACTORY = 0x33128a8fC17869897dcE68Ed026d694621f6FDfD;
-        address BALANCER_VAULT = 0xBA12222222228d8Ba445958a75a0704d566BF2C8;
+        address BALANCER_VAULT = 0xbA1333333333a1BA1108E8412f11850A5C319bA9;
 
         // Set up the index tokens array in sorted order
         address[] memory tokens = new address[](8);
@@ -32,32 +32,41 @@ contract DeployIndexFund is Script {
         for (uint256 i = 0; i < 8; i++) {
             weights[i] = 125e15;
         }
-/** 
-        // Swap fee: 0.0001e18
-        uint256 swapFee = 0.0001e18;
-
-        // Create a deterministic salt. Using the same salt as in the test.
-        bytes32 salt = keccak256(abi.encodePacked("Muse Index", "IMUSE", "test_salt"));
-
-        BalancerWeightedPoolDeployer poolDeployer = new BalancerWeightedPoolDeployer();
-
-        // Create the weighted pool.
-        // Note: This pool address will be used as the balancerPoolToken in IndexFund.
-        address pool = poolDeployer.createWeightedPool(
-            "Muse Index",
-            "IMUSE",
-            tokens,
-            weights,
-            swapFee,
-            msg.sender, // setting the deployer as the owner of the pool
-            salt
-        );**/
+        /**
+         * // Swap fee: 0.0001e18
+         *     uint256 swapFee = 0.0001e18;
+         *
+         *     // Create a deterministic salt. Using the same salt as in the test.
+         *     bytes32 salt = keccak256(abi.encodePacked("Muse Index", "IMUSE", "test_salt"));
+         *
+         *     BalancerWeightedPoolDeployer poolDeployer = new BalancerWeightedPoolDeployer();
+         *
+         *     // Create the weighted pool.
+         *     // Note: This pool address will be used as the balancerPoolToken in IndexFund.
+         *     address pool = poolDeployer.createWeightedPool(
+         *         "Muse Index",
+         *         "IMUSE",
+         *         tokens,
+         *         weights,
+         *         swapFee,
+         *         msg.sender, // setting the deployer as the owner of the pool
+         *         salt
+         *     );*
+         */
 
         // Deploy the IndexFund contract passing the pool address as the pool token.
-        IndexFund fund =
-            new IndexFund(WETH_ADDRESS, UNISWAP_ROUTER, UNISWAP_FACTORY, BALANCER_VAULT, 0x6d3110bfad307A5E1eC8D64434cFf6d273Fc0bEc, tokens, weights);
+        IndexFund fund = new IndexFund(
+            WETH_ADDRESS,
+            UNISWAP_ROUTER,
+            UNISWAP_FACTORY,
+            BALANCER_VAULT,
+            0x9dA18982a33FD0c7051B19F0d7C76F2d5E7e017c,
+            0x6d3110bfad307A5E1eC8D64434cFf6d273Fc0bEc,
+            tokens,
+            weights
+        );
 
-        console.log("Weighted pool deployed at:", pool);
+        console.log("Weighted pool deployed at:", 0x6d3110bfad307A5E1eC8D64434cFf6d273Fc0bEc);
         console.log("IndexFund deployed at:", address(fund));
 
         vm.stopBroadcast();

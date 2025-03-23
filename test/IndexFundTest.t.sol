@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {console2} from "forge-std/console2.sol";
@@ -24,7 +24,9 @@ contract IndexFundTest is Test {
     address constant WETH_ADDRESS = 0x4200000000000000000000000000000000000006;
     address constant UNISWAP_ROUTER = 0x2626664c2603336E57B271c5C0b26F421741e481;
     address constant UNISWAP_FACTORY = 0x33128a8fC17869897dcE68Ed026d694621f6FDfD;
-    address constant BALANCER_VAULT = 0xBA12222222228d8Ba445958a75a0704d566BF2C8;
+    address constant BALANCER_VAULT = 0xbA1333333333a1BA1108E8412f11850A5C319bA9;
+    address constant BALANCER_ROUTER = 0x9dA18982a33FD0c7051B19F0d7C76F2d5E7e017c;
+    address constant BALANCER_POOL_TOKEN = 0x6d3110bfad307A5E1eC8D64434cFf6d273Fc0bEc;
 
     // Test accounts
     address alice = address(0x1);
@@ -89,40 +91,30 @@ contract IndexFundTest is Test {
         vm.deal(bob, 1000 ether);
     }
 
-    function _createWeightedPoolAndIndexFund() internal returns (address pool, IndexFund fundInstance) {
-        string memory name = "Muse Index";
-        string memory symbol = "IMUSE";
-        uint256 swapFee = 0.0001e18;
-        // Generate a deterministic salt for testing
-        bytes32 salt = keccak256(abi.encodePacked(name, symbol, "test_salt"));
-
-        pool = balancerWeightedPoolDeployer.createWeightedPool(
-            name, symbol, indexTokens, tokenWeights, swapFee, address(this), salt
-        );
-
+    function _createIndexFund() internal returns (IndexFund fundInstance) {
         vm.startPrank(owner);
-        // Create IndexFund with all required parameters
+        // Create IndexFund with all required parameters using existing pool
         fundInstance = new IndexFund(
             WETH_ADDRESS,
             UNISWAP_ROUTER,
             UNISWAP_FACTORY,
             BALANCER_VAULT,
-            pool, // This is the balancer pool token
+            BALANCER_ROUTER,
+            BALANCER_POOL_TOKEN,
             indexTokens,
             tokenWeights
         );
         vm.stopPrank();
-        return (pool, fundInstance);
+        return fundInstance;
     }
 
-    function test_createWeightedPool() public {
-        (address pool, IndexFund fundInstance) = _createWeightedPoolAndIndexFund();
-        require(pool != address(0), "Pool creation failed");
+    function test_createIndexFund() public {
+        IndexFund fundInstance = _createIndexFund();
+        require(address(fundInstance) != address(0), "IndexFund creation failed");
     }
 
     function test_mint() public {
-        (address pool, IndexFund fundInstance) = _createWeightedPoolAndIndexFund();
-        require(pool != address(0), "Pool creation failed");
+        IndexFund fundInstance = _createIndexFund();
         require(address(fundInstance) != address(0), "IndexFund creation failed");
         console2.log("VAULT BALANCE BEFORE MINT");
         _logTokenBalance();
@@ -138,8 +130,7 @@ contract IndexFundTest is Test {
     }
 
     function test_redeem() public {
-        (address pool, IndexFund fundInstance) = _createWeightedPoolAndIndexFund();
-        require(pool != address(0), "Pool creation failed");
+        IndexFund fundInstance = _createIndexFund();
         require(address(fundInstance) != address(0), "IndexFund creation failed");
         vm.startPrank(bob);
         fundInstance.mint{value: 1 ether}();
@@ -164,7 +155,7 @@ contract IndexFundTest is Test {
     }
 
     function test_setFeeBasisPoints() public {
-        (, IndexFund fundInstance) = _createWeightedPoolAndIndexFund();
+        IndexFund fundInstance = _createIndexFund();
         // Check initial fee is 50 basis points (0.5%)
         assertEq(fundInstance.feeBasisPoints(), 50);
 

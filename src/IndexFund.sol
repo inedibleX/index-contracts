@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.24;
 
 import {ReentrancyGuard} from "lib/openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
 import {Ownable} from "lib/openzeppelin-contracts/contracts/access/Ownable.sol";
 import {IERC20} from "lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import {OracleLibrary} from "./lib/external/OracleLibrary.sol";
-import {IWeightedPool, IVault, IAsset} from "./interfaces/IBalancer.sol";
+import {IRouter} from "./interfaces/IBalancerV3.sol";
 import {IUniswapV3Router, IUniswapV3Factory, IUniswapV3Pool} from "./interfaces/IUniswap.sol";
 import {IWETH} from "./interfaces/IWETH.sol";
 
 /// @title IndexFund
 /// @notice This contract facilitates the creation and redemption of fund shares
 /// by swapping ETH for a set of index tokens via Uniswap and joining/exiting a Balancer pool.
-/// @dev The contract interacts with Uniswap V3 for swaps and the Balancer Vault for pool management.
+/// @dev The contract interacts with Uniswap V3 for swaps and the Balancer V3 for pool management.
 /// Ensure that necessary token approvals are set.
 contract IndexFund is ReentrancyGuard, Ownable {
     // Contract state variables
@@ -20,8 +20,11 @@ contract IndexFund is ReentrancyGuard, Ownable {
     address public immutable uniswapRouter;
     address public immutable uniswapFactory;
     address public immutable balancerVault;
-    bytes32 public balancerPoolId;
-    address public balancerPoolToken;
+    address public immutable balancerRouter; // Added Router address
+    address public balancerPoolToken; // Now using pool address directly instead of poolId
+
+    // Permit2 address used by Balancer V3 for token approvals
+    address public constant PERMIT2_ADDRESS = 0x000000000022D473030F116dDEE9F6B43aC78BA3;
 
     // Token configuration
     address[] public indexTokens;
@@ -61,6 +64,7 @@ contract IndexFund is ReentrancyGuard, Ownable {
     /// @param _uniswapRouter The Uniswap V3 router address.
     /// @param _uniswapFactory The Uniswap V3 factory address.
     /// @param _balancerVault The Balancer Vault address.
+    /// @param _balancerRouter The Balancer Router address.
     /// @param _balancerPoolToken The address of the Balancer pool token.
     /// @param _indexTokens The addresses of the index tokens.
     /// @param _tokenWeights The weights for the index tokens.
@@ -69,6 +73,7 @@ contract IndexFund is ReentrancyGuard, Ownable {
         address _uniswapRouter,
         address _uniswapFactory,
         address _balancerVault,
+        address _balancerRouter,
         address _balancerPoolToken,
         address[] memory _indexTokens,
         uint256[] memory _tokenWeights
@@ -77,10 +82,7 @@ contract IndexFund is ReentrancyGuard, Ownable {
         uniswapRouter = _uniswapRouter;
         uniswapFactory = _uniswapFactory;
         balancerVault = _balancerVault;
-        // Retrieve the pool ID from the weighted pool contract
-        balancerPoolId = IWeightedPool(_balancerPoolToken).getPoolId();
-        // Although getPoolTokens is called, we override indexTokens with _indexTokens.
-        (indexTokens,,) = IVault(_balancerVault).getPoolTokens(balancerPoolId);
+        balancerRouter = _balancerRouter;
         balancerPoolToken = _balancerPoolToken;
         indexTokens = _indexTokens;
         tokenWeights = _tokenWeights;
@@ -88,6 +90,9 @@ contract IndexFund is ReentrancyGuard, Ownable {
         for (uint256 i = 0; i < _indexTokens.length; i++) {
             IERC20(_indexTokens[i]).approve(_uniswapRouter, type(uint256).max);
             IERC20(_indexTokens[i]).approve(_balancerVault, type(uint256).max);
+            IERC20(_indexTokens[i]).approve(_balancerRouter, type(uint256).max);
+            // Add approval for Permit2
+            IERC20(_indexTokens[i]).approve(PERMIT2_ADDRESS, type(uint256).max);
         }
     }
 
@@ -99,30 +104,37 @@ contract IndexFund is ReentrancyGuard, Ownable {
         uint256 netDeposit = msg.value - feeAmount;
 
         uint256 swapAmount = netDeposit / indexTokens.length;
-        uint256[] memory maxAmountsIn = new uint256[](indexTokens.length);
+        uint256[] memory exactAmountsIn = new uint256[](indexTokens.length);
+
         for (uint256 i = 0; i < indexTokens.length; i++) {
             uint256 amountOut = getQuote(wethAddress, indexTokens[i], uint128(swapAmount));
             uint256 amountOutMinimum = amountOut * (DIVISOR - slippageTolerance) / DIVISOR;
-            maxAmountsIn[i] = swapExactInputSingle(
+            exactAmountsIn[i] = swapExactInputSingle(
                 wethAddress, indexTokens[i], DEFAULT_FEE_TIER, uint128(swapAmount), uint128(amountOutMinimum), true
             );
         }
 
-        IAsset[] memory assets = new IAsset[](indexTokens.length);
+        // Create wrapUnderlying flags - false means use as standard ERC20
+        bool[] memory wrapUnderlying = new bool[](indexTokens.length);
         for (uint256 i = 0; i < indexTokens.length; i++) {
-            assets[i] = IAsset(indexTokens[i]);
+            wrapUnderlying[i] = false;
         }
 
-        uint256 poolBalanceBefore = IERC20(balancerPoolToken).balanceOf(address(this));
-        joinBalancerPool(assets, maxAmountsIn);
-        uint256 poolBalanceAfter = IERC20(balancerPoolToken).balanceOf(address(this));
-        uint256 mintedPoolTokens = poolBalanceAfter - poolBalanceBefore;
+        // Add liquidity to the pool via the Router with no minimum output (as requested)
+        uint256 bptAmountOut = IRouter(balancerRouter).addLiquidityUnbalancedToERC4626Pool(
+            balancerPoolToken,
+            wrapUnderlying,
+            exactAmountsIn,
+            0, // No minimum output as requested
+            false, // wethIsEth = false, as we're already dealing with WETH
+            "0x" // Empty userData
+        );
 
-        require(IERC20(balancerPoolToken).transfer(msg.sender, mintedPoolTokens), "Transfer of BPT failed");
+        require(IERC20(balancerPoolToken).transfer(msg.sender, bptAmountOut), "Transfer of BPT failed");
 
-        payable(owner).transfer(feeAmount);
+        payable(owner()).transfer(feeAmount);
 
-        emit Minted(msg.sender, netDeposit, mintedPoolTokens);
+        emit Minted(msg.sender, netDeposit, bptAmountOut);
     }
 
     /// @notice Swaps an input amount of a token for another token via Uniswap V3.
@@ -177,26 +189,37 @@ contract IndexFund is ReentrancyGuard, Ownable {
         require(IERC20(balancerPoolToken).transferFrom(msg.sender, address(this), bptAmount), "Transfer of BPT failed");
 
         uint256 len = indexTokens.length;
-        address[] memory tokens = new address[](len);
-        for (uint256 i = 0; i < len; i++) {
-            tokens[i] = indexTokens[i];
-        }
         uint256[] memory minAmountsOut = new uint256[](len);
         for (uint256 i = 0; i < len; i++) {
-            minAmountsOut[i] = 0;
+            minAmountsOut[i] = 0; // No minimum amounts as requested
         }
 
-        exitBalancerPool(bptAmount, tokens, minAmountsOut);
+        // Create unwrapWrapped flags - false means use as standard ERC20
+        bool[] memory unwrapWrapped = new bool[](len);
+        for (uint256 i = 0; i < len; i++) {
+            unwrapWrapped[i] = false;
+        }
+
+        // Remove liquidity from the pool via the Router
+        (, uint256[] memory amountsOut) = IRouter(balancerRouter).removeLiquidityProportionalFromERC4626Pool(
+            balancerPoolToken,
+            unwrapWrapped,
+            bptAmount,
+            minAmountsOut,
+            false, // wethIsEth = false, we want to receive WETH tokens
+            "0x" // Empty userData
+        );
 
         uint256 totalWETH;
         for (uint256 i = 0; i < len; i++) {
-            uint256 tokenBalance = IERC20(tokens[i]).balanceOf(address(this));
+            uint256 tokenBalance = amountsOut[i];
             if (tokenBalance > 0) {
-                if (tokens[i] == wethAddress) {
+                if (indexTokens[i] == wethAddress) {
                     totalWETH += tokenBalance;
                 } else {
-                    uint256 wethReceived =
-                        swapExactInputSingle(tokens[i], wethAddress, DEFAULT_FEE_TIER, uint128(tokenBalance), 0, false);
+                    uint256 wethReceived = swapExactInputSingle(
+                        indexTokens[i], wethAddress, DEFAULT_FEE_TIER, uint128(tokenBalance), 0, false
+                    );
                     totalWETH += wethReceived;
                 }
             }
@@ -207,65 +230,15 @@ contract IndexFund is ReentrancyGuard, Ownable {
         uint256 netWETH = totalWETH - feeOnRedeem;
 
         if (netWETH > 0) {
-            IWETH(wethAddress).withdraw(totalWETH);
+            IWETH(wethAddress).withdraw(netWETH);
         }
 
         (bool success,) = msg.sender.call{value: netWETH}("");
         require(success, "ETH transfer failed");
 
-        payable(owner).transfer(feeOnRedeem);
+        payable(owner()).transfer(feeOnRedeem);
 
         emit Redeemed(msg.sender, bptAmount, netWETH);
-    }
-
-    /// @notice Joins a Balancer pool with the provided assets and maximum token amounts.
-    /// @param assets The array of assets to join the pool with.
-    /// @param maxAmountsIn The corresponding maximum amounts for each asset.
-    function joinBalancerPool(IAsset[] memory assets, uint256[] memory maxAmountsIn) internal {
-        uint256 poolSupply = IERC20(balancerPoolToken).totalSupply();
-        bytes memory userData;
-
-        if (poolSupply == 0) {
-            userData = abi.encode(0, maxAmountsIn);
-        } else {
-            uint256 minimumBPT = 0;
-            userData = abi.encode(1, maxAmountsIn, minimumBPT);
-        }
-
-        IVault(balancerVault).joinPool(
-            balancerPoolId,
-            address(this),
-            address(this),
-            IVault.JoinPoolRequest({
-                assets: assets,
-                maxAmountsIn: maxAmountsIn,
-                userData: userData,
-                fromInternalBalance: false
-            })
-        );
-    }
-
-    /// @notice Exits the Balancer pool by redeeming a specified amount of BPT for underlying assets.
-    /// @param bptToRedeem The amount of Balancer pool tokens to redeem.
-    /// @param assets The addresses of the assets in the pool.
-    /// @param minAmountsOut The minimum amounts expected for each asset.
-    function exitBalancerPool(uint256 bptToRedeem, address[] memory assets, uint256[] memory minAmountsOut) internal {
-        IAsset[] memory iAssets = new IAsset[](assets.length);
-        for (uint256 i = 0; i < assets.length; i++) {
-            iAssets[i] = IAsset(assets[i]);
-        }
-
-        IVault(balancerVault).exitPool(
-            balancerPoolId,
-            address(this),
-            payable(address(this)),
-            IVault.ExitPoolRequest({
-                assets: iAssets,
-                minAmountsOut: minAmountsOut,
-                userData: abi.encode(1, bptToRedeem),
-                toInternalBalance: false
-            })
-        );
     }
 
     /// @notice Updates the slippage tolerance for swaps.
