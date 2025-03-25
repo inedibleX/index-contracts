@@ -90,8 +90,8 @@ contract IndexFundTest is Test {
     }
 
     function _createWeightedPoolAndIndexFund() internal returns (address pool, IndexFund fundInstance) {
-        string memory name = "Muse Index";
-        string memory symbol = "IMUSE";
+        string memory name = "Base Meme Index";
+        string memory symbol = "BMI";
         uint256 swapFee = 0.0001e18;
         // Generate a deterministic salt for testing
         bytes32 salt = keccak256(abi.encodePacked(name, symbol, "test_salt"));
@@ -118,6 +118,7 @@ contract IndexFundTest is Test {
     function test_createWeightedPool() public {
         (address pool, IndexFund fundInstance) = _createWeightedPoolAndIndexFund();
         require(pool != address(0), "Pool creation failed");
+        require(address(fundInstance) != address(0), "IndexFund creation failed");
     }
 
     function test_mint() public {
@@ -179,5 +180,53 @@ contract IndexFundTest is Test {
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
         fundInstance.setFeeBasisPoints(75);
+    }
+
+    function test_mintFeesToOwner() public {
+        (, IndexFund fundInstance) = _createWeightedPoolAndIndexFund();
+
+        uint256 depositAmount = 1 ether;
+        uint256 expectedFee = (depositAmount * fundInstance.feeBasisPoints()) / fundInstance.DIVISOR(); // 0.5% fee
+
+        // Get owner's balance before mint
+        uint256 ownerBalanceBefore = owner.balance;
+
+        // Perform mint operation
+        vm.startPrank(alice);
+        fundInstance.mint{value: depositAmount}();
+        vm.stopPrank();
+
+        // Get owner's balance after mint
+        uint256 ownerBalanceAfter = owner.balance;
+
+        // Verify that the fee was sent to the owner
+        assertEq(ownerBalanceAfter - ownerBalanceBefore, expectedFee, "Mint fee was not correctly sent to owner");
+    }
+
+    function test_redeemFeesToOwner() public {
+        (, IndexFund fundInstance) = _createWeightedPoolAndIndexFund();
+
+        uint256 depositAmount = 1 ether;
+
+        // First mint some tokens to get BPT
+        vm.startPrank(bob);
+        fundInstance.mint{value: depositAmount}();
+        uint256 bptBalance = IERC20(fundInstance.balancerPoolToken()).balanceOf(bob);
+        IERC20(fundInstance.balancerPoolToken()).approve(address(fundInstance), bptBalance);
+
+        // Get owner's balance before redeem
+        uint256 ownerBalanceBefore = owner.balance;
+
+        // Perform redeem operation
+        fundInstance.redeem(bptBalance);
+        vm.stopPrank();
+
+        // Get owner's balance after redeem
+        uint256 ownerBalanceAfter = owner.balance;
+
+        // Verify that the fee was sent to the owner
+        // We can't precisely predict the redeem fee amount since it depends on token swaps
+        // But we can verify that the owner received some ETH
+        assertGt(ownerBalanceAfter, ownerBalanceBefore, "Redeem fee was not sent to owner");
     }
 }

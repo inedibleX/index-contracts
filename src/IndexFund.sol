@@ -120,7 +120,7 @@ contract IndexFund is ReentrancyGuard, Ownable {
 
         require(IERC20(balancerPoolToken).transfer(msg.sender, mintedPoolTokens), "Transfer of BPT failed");
 
-        payable(owner).transfer(feeAmount);
+        payable(owner()).transfer(feeAmount);
 
         emit Minted(msg.sender, netDeposit, mintedPoolTokens);
     }
@@ -213,7 +213,7 @@ contract IndexFund is ReentrancyGuard, Ownable {
         (bool success,) = msg.sender.call{value: netWETH}("");
         require(success, "ETH transfer failed");
 
-        payable(owner).transfer(feeOnRedeem);
+        payable(owner()).transfer(feeOnRedeem);
 
         emit Redeemed(msg.sender, bptAmount, netWETH);
     }

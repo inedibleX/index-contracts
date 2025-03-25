@@ -32,30 +32,30 @@ contract DeployIndexFund is Script {
         for (uint256 i = 0; i < 8; i++) {
             weights[i] = 125e15;
         }
-/** 
+
         // Swap fee: 0.0001e18
         uint256 swapFee = 0.0001e18;
 
         // Create a deterministic salt. Using the same salt as in the test.
-        bytes32 salt = keccak256(abi.encodePacked("Muse Index", "IMUSE", "test_salt"));
+        bytes32 salt = keccak256(abi.encodePacked("Base Meme Index", "BMI", "test_salt"));
 
         BalancerWeightedPoolDeployer poolDeployer = new BalancerWeightedPoolDeployer();
 
         // Create the weighted pool.
         // Note: This pool address will be used as the balancerPoolToken in IndexFund.
         address pool = poolDeployer.createWeightedPool(
-            "Muse Index",
-            "IMUSE",
+            "Base Meme Index",
+            "BMI",
             tokens,
             weights,
             swapFee,
             msg.sender, // setting the deployer as the owner of the pool
             salt
-        );**/
+        );
 
         // Deploy the IndexFund contract passing the pool address as the pool token.
         IndexFund fund =
-            new IndexFund(WETH_ADDRESS, UNISWAP_ROUTER, UNISWAP_FACTORY, BALANCER_VAULT, 0x6d3110bfad307A5E1eC8D64434cFf6d273Fc0bEc, tokens, weights);
+            new IndexFund(WETH_ADDRESS, UNISWAP_ROUTER, UNISWAP_FACTORY, BALANCER_VAULT, pool, tokens, weights);
 
         console.log("Weighted pool deployed at:", pool);
         console.log("IndexFund deployed at:", address(fund));
