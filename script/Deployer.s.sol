@@ -14,6 +14,7 @@ contract DeployIndexFund is Script {
         address WETH_ADDRESS = 0x4200000000000000000000000000000000000006;
         address UNISWAP_ROUTER = 0x2626664c2603336E57B271c5C0b26F421741e481;
         address UNISWAP_FACTORY = 0x33128a8fC17869897dcE68Ed026d694621f6FDfD;
+        address UNISWAP_V2_ROUTER = 0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24;
         address BALANCER_VAULT = 0xBA12222222228d8Ba445958a75a0704d566BF2C8;
 
         // Set up the index tokens array in sorted order
@@ -32,10 +33,10 @@ contract DeployIndexFund is Script {
         swapPoolTypes[1] = IndexFund.SwapPoolType.UniV3PointThreePercent;
         swapPoolTypes[2] = IndexFund.SwapPoolType.UniV3OnePercent;
         swapPoolTypes[3] = IndexFund.SwapPoolType.UniV3OnePercent;
-        swapPoolTypes[4] = IndexFund.SwapPoolType.UniV3PointThreePercent; // TODO: Change this to v2
-        swapPoolTypes[5] = IndexFund.SwapPoolType.UniV3OnePercent;
+        swapPoolTypes[4] = IndexFund.SwapPoolType.UniV2;
+        swapPoolTypes[5] = IndexFund.SwapPoolType.UniV2;
         swapPoolTypes[6] = IndexFund.SwapPoolType.UniV3OnePercent;
-        swapPoolTypes[7] = IndexFund.SwapPoolType.UniV3PointThreePercent;
+        swapPoolTypes[7] = IndexFund.SwapPoolType.UniV2;
 
         // All token weights are 12.5% => 125e15 so that the sum equals 1e18.
         uint256[] memory weights = new uint256[](8);
@@ -44,28 +45,37 @@ contract DeployIndexFund is Script {
         }
 
         // Swap fee: 0.0001e18
-        uint256 swapFee = 0.0001e18;
+        // uint256 swapFee = 0.0001e18;
 
-        // Create a deterministic salt. Using the same salt as in the test.
-        bytes32 salt = keccak256(abi.encodePacked("Base Meme Index", "BMI", "test_salt"));
+        // // Create a deterministic salt. Using the same salt as in the test.
+        // bytes32 salt = keccak256(abi.encodePacked("Base Meme Index", "BMI", "test_salt"));
 
-        BalancerWeightedPoolDeployer poolDeployer = new BalancerWeightedPoolDeployer();
+        // BalancerWeightedPoolDeployer poolDeployer = new BalancerWeightedPoolDeployer();
 
         // Create the weighted pool.
         // Note: This pool address will be used as the balancerPoolToken in IndexFund.
-        address pool = poolDeployer.createWeightedPool(
-            "Base Meme Index",
-            "BMI",
-            tokens,
-            weights,
-            swapFee,
-            msg.sender, // setting the deployer as the owner of the pool
-            salt
-        );
+        // address pool = poolDeployer.createWeightedPool(
+        //     "Base Meme Index",
+        //     "BMI",
+        //     tokens,
+        //     weights,
+        //     swapFee,
+        //     msg.sender, // setting the deployer as the owner of the pool
+        //     salt
+        // );
+        address pool = 0xB8931645216D8FF2B4D8323A6BBbEf9bD482DB35;
 
         // Deploy the IndexFund contract passing the pool address as the pool token.
         IndexFund fund = new IndexFund(
-            WETH_ADDRESS, UNISWAP_ROUTER, UNISWAP_FACTORY, BALANCER_VAULT, pool, tokens, weights, swapPoolTypes
+            WETH_ADDRESS,
+            UNISWAP_ROUTER,
+            UNISWAP_FACTORY,
+            UNISWAP_V2_ROUTER,
+            BALANCER_VAULT,
+            pool,
+            tokens,
+            weights,
+            swapPoolTypes
         );
 
         console.log("Weighted pool deployed at:", pool);

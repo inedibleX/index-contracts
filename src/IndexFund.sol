@@ -7,6 +7,7 @@ import {IERC20} from "lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.so
 import {OracleLibrary} from "./lib/external/OracleLibrary.sol";
 import {IWeightedPool, IVault, IAsset} from "./interfaces/IBalancer.sol";
 import {IUniswapV3Router, IUniswapV3Factory, IUniswapV3Pool} from "./interfaces/IUniswap.sol";
+import {IUniswapV2Router} from "./interfaces/IUniswapV2.sol";
 import {IWETH} from "./interfaces/IWETH.sol";
 
 /// @title IndexFund
@@ -25,8 +26,9 @@ contract IndexFund is ReentrancyGuard, Ownable {
     // Contract state variables
 
     address public immutable wethAddress;
-    address public immutable uniswapRouter;
-    address public immutable uniswapFactory;
+    address public immutable uniswapV3Router;
+    address public immutable uniswapV3Factory;
+    address public immutable uniswapV2Router;
     address public immutable balancerVault;
     bytes32 public balancerPoolId;
     address public balancerPoolToken;
@@ -67,16 +69,19 @@ contract IndexFund is ReentrancyGuard, Ownable {
 
     /// @notice Initializes the IndexFund contract.
     /// @param _wethAddress The address of WETH.
-    /// @param _uniswapRouter The Uniswap V3 router address.
-    /// @param _uniswapFactory The Uniswap V3 factory address.
+    /// @param _uniswapV3Router The Uniswap V3 router address.
+    /// @param _uniswapV3Factory The Uniswap V3 factory address.
+    /// @param _uniswapV2Router The Uniswap V2 router address.
     /// @param _balancerVault The Balancer Vault address.
     /// @param _balancerPoolToken The address of the Balancer pool token.
     /// @param _indexTokens The addresses of the index tokens.
     /// @param _tokenWeights The weights for the index tokens.
+    /// @param _swapPoolTypes The pool types for swapping each token.
     constructor(
         address _wethAddress,
-        address _uniswapRouter,
-        address _uniswapFactory,
+        address _uniswapV3Router,
+        address _uniswapV3Factory,
+        address _uniswapV2Router,
         address _balancerVault,
         address _balancerPoolToken,
         address[] memory _indexTokens,
@@ -84,8 +89,9 @@ contract IndexFund is ReentrancyGuard, Ownable {
         SwapPoolType[] memory _swapPoolTypes
     ) Ownable(msg.sender) {
         wethAddress = _wethAddress;
-        uniswapRouter = _uniswapRouter;
-        uniswapFactory = _uniswapFactory;
+        uniswapV3Router = _uniswapV3Router;
+        uniswapV3Factory = _uniswapV3Factory;
+        uniswapV2Router = _uniswapV2Router;
         balancerVault = _balancerVault;
         // Retrieve the pool ID from the weighted pool contract
         balancerPoolId = IWeightedPool(_balancerPoolToken).getPoolId();
@@ -96,7 +102,8 @@ contract IndexFund is ReentrancyGuard, Ownable {
         tokenWeights = _tokenWeights;
 
         for (uint256 i = 0; i < _indexTokens.length; i++) {
-            IERC20(_indexTokens[i]).approve(_uniswapRouter, type(uint256).max);
+            IERC20(_indexTokens[i]).approve(_uniswapV3Router, type(uint256).max);
+            IERC20(_indexTokens[i]).approve(_uniswapV2Router, type(uint256).max);
             IERC20(_indexTokens[i]).approve(_balancerVault, type(uint256).max);
             swapPoolTypes[_indexTokens[i]] = _swapPoolTypes[i];
         }
@@ -150,11 +157,20 @@ contract IndexFund is ReentrancyGuard, Ownable {
         uint128 amountOutMinimum,
         bool isMint
     ) internal returns (uint256 amountOut) {
-        if (IERC20(tokenIn).allowance(address(this), uniswapRouter) < amountIn) {
-            IERC20(tokenIn).approve(uniswapRouter, type(uint256).max);
-        }
         address token = isMint ? tokenOut : tokenIn;
-        uint24 fee = swapPoolTypes[token] == SwapPoolType.UniV3OnePercent ? 10000 : 3000;
+        SwapPoolType poolType = swapPoolTypes[token];
+
+        // For V2 swaps, use the dedicated V2 swap function
+        if (poolType == SwapPoolType.UniV2) {
+            return swapTokensV2(tokenIn, tokenOut, amountIn, amountOutMinimum, isMint);
+        }
+
+        // Else proceed with V3 swap
+        if (IERC20(tokenIn).allowance(address(this), uniswapV3Router) < amountIn) {
+            IERC20(tokenIn).approve(uniswapV3Router, type(uint256).max);
+        }
+
+        uint24 fee = poolType == SwapPoolType.UniV3OnePercent ? 10000 : 3000;
 
         IUniswapV3Router.ExactInputSingleParams memory params = IUniswapV3Router.ExactInputSingleParams({
             tokenIn: tokenIn,
@@ -166,7 +182,73 @@ contract IndexFund is ReentrancyGuard, Ownable {
             sqrtPriceLimitX96: 0
         });
 
-        amountOut = IUniswapV3Router(uniswapRouter).exactInputSingle{value: isMint ? amountIn : 0}(params);
+        amountOut = IUniswapV3Router(uniswapV3Router).exactInputSingle{value: isMint ? amountIn : 0}(params);
+    }
+
+    /**
+     * @notice Swap tokens using the Uniswap V2 Router
+     * @dev Used for tokens that have more liquidity in V2 pools
+     * @param tokenIn The input token address
+     * @param tokenOut The output token address
+     * @param amountIn The amount of input tokens
+     * @param amountOutMinimum The minimum expected output amount
+     * @param isMint Whether this is a mint operation (ETH → token) or a redeem operation (token → WETH)
+     * @return amountOut The amount of output tokens received
+     */
+    function swapTokensV2(address tokenIn, address tokenOut, uint128 amountIn, uint128 amountOutMinimum, bool isMint)
+        internal
+        returns (uint256 amountOut)
+    {
+        // Create the token path for the swap
+        address[] memory path = new address[](2);
+        path[0] = tokenIn;
+        path[1] = tokenOut;
+
+        // Set deadline to a reasonable value in the future
+        uint256 deadline = block.timestamp + 15 minutes;
+
+        if (isMint) {
+            // Minting: ETH → token
+            require(tokenIn == wethAddress, "Expected WETH as input token for minting");
+
+            // No need to approve since we're sending ETH directly
+            uint256[] memory amounts = IUniswapV2Router(uniswapV2Router).swapExactETHForTokens{value: amountIn}(
+                amountOutMinimum, path, address(this), deadline
+            );
+
+            amountOut = amounts[amounts.length - 1];
+        } else {
+            // Redeeming: token → WETH (not ETH directly)
+            require(tokenOut == wethAddress, "Expected WETH as output token for redeeming");
+
+            // Approve the V2 router to spend our tokens
+            if (IERC20(tokenIn).allowance(address(this), uniswapV2Router) < amountIn) {
+                IERC20(tokenIn).approve(uniswapV2Router, type(uint256).max);
+            }
+
+            // Swap tokens for WETH (not directly to ETH)
+            uint256[] memory amounts = IUniswapV2Router(uniswapV2Router).swapExactTokensForTokens(
+                amountIn, amountOutMinimum, path, address(this), deadline
+            );
+
+            amountOut = amounts[amounts.length - 1];
+        }
+    }
+
+    /**
+     * @notice Get a quote for swapping tokens using Uniswap V2
+     * @param tokenIn The input token address
+     * @param tokenOut The output token address
+     * @param amountIn The amount of input tokens
+     * @return The estimated amount of output tokens
+     */
+    function getQuoteV2(address tokenIn, address tokenOut, uint128 amountIn) public view returns (uint256) {
+        address[] memory path = new address[](2);
+        path[0] = tokenIn;
+        path[1] = tokenOut;
+
+        uint256[] memory amounts = IUniswapV2Router(uniswapV2Router).getAmountsOut(amountIn, path);
+        return amounts[amounts.length - 1];
     }
 
     /// @notice Retrieves a quote for swapping tokens using the current Uniswap pool tick.
@@ -175,7 +257,15 @@ contract IndexFund is ReentrancyGuard, Ownable {
     /// @param amountIn The amount of tokenIn.
     /// @return The estimated amount of tokenOut obtainable.
     function getQuote(address tokenIn, address tokenOut, uint128 amountIn) public view returns (uint256) {
-        address pool = IUniswapV3Factory(uniswapFactory).getPool(tokenIn, tokenOut, DEFAULT_FEE_TIER);
+        // Check if the token should use V2 swaps
+        SwapPoolType poolType = swapPoolTypes[tokenOut];
+
+        if (poolType == SwapPoolType.UniV2) {
+            return getQuoteV2(tokenIn, tokenOut, amountIn);
+        }
+
+        // Otherwise use V3 quote logic
+        address pool = IUniswapV3Factory(uniswapV3Factory).getPool(tokenIn, tokenOut, DEFAULT_FEE_TIER);
         require(pool != address(0), "Pool does not exist.");
         (, int24 tick,,,,,) = IUniswapV3Pool(pool).slot0();
         return OracleLibrary.getQuoteAtTick(tick, amountIn, tokenIn, tokenOut);

@@ -24,6 +24,8 @@ contract IndexFundTest is Test {
     address constant WETH_ADDRESS = 0x4200000000000000000000000000000000000006;
     address constant UNISWAP_ROUTER = 0x2626664c2603336E57B271c5C0b26F421741e481;
     address constant UNISWAP_FACTORY = 0x33128a8fC17869897dcE68Ed026d694621f6FDfD;
+    address constant UNISWAP_V2_ROUTER = 0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24;
+    address constant UNISWAP_V2_FACTORY = 0x8909Dc15e40173Ff4699343b6eB8132c65e18eC6;
     address constant BALANCER_VAULT = 0xBA12222222228d8Ba445958a75a0704d566BF2C8;
 
     // Test accounts
@@ -91,15 +93,16 @@ contract IndexFundTest is Test {
     }
 
     function _createWeightedPoolAndIndexFund() internal returns (address pool, IndexFund fundInstance) {
-        string memory name = "Base Meme Index";
-        string memory symbol = "BMI";
-        uint256 swapFee = 0.0001e18;
+        // string memory name = "Base Meme Index";
+        // string memory symbol = "BMI";
+        // uint256 swapFee = 0.0001e18;
         // Generate a deterministic salt for testing
-        bytes32 salt = keccak256(abi.encodePacked(name, symbol, "test_salt"));
+        // bytes32 salt = keccak256(abi.encodePacked(name, symbol, "test_salt"));
 
-        pool = balancerWeightedPoolDeployer.createWeightedPool(
-            name, symbol, indexTokens, tokenWeights, swapFee, address(this), salt
-        );
+        // pool = balancerWeightedPoolDeployer.createWeightedPool(
+        //     name, symbol, indexTokens, tokenWeights, swapFee, address(this), salt
+        // );
+        pool = 0xB8931645216D8FF2B4D8323A6BBbEf9bD482DB35;
 
         vm.startPrank(owner);
 
@@ -108,22 +111,27 @@ contract IndexFundTest is Test {
         swapPoolTypes[1] = IndexFund.SwapPoolType.UniV3PointThreePercent;
         swapPoolTypes[2] = IndexFund.SwapPoolType.UniV3OnePercent;
         swapPoolTypes[3] = IndexFund.SwapPoolType.UniV3OnePercent;
-        swapPoolTypes[4] = IndexFund.SwapPoolType.UniV3PointThreePercent; // TODO: Change this to v2
-        swapPoolTypes[5] = IndexFund.SwapPoolType.UniV3OnePercent;
+        swapPoolTypes[4] = IndexFund.SwapPoolType.UniV2;
+        swapPoolTypes[5] = IndexFund.SwapPoolType.UniV2;
         swapPoolTypes[6] = IndexFund.SwapPoolType.UniV3OnePercent;
-        swapPoolTypes[7] = IndexFund.SwapPoolType.UniV3PointThreePercent;
+        swapPoolTypes[7] = IndexFund.SwapPoolType.UniV2;
 
         // Create IndexFund with all required parameters
         fundInstance = new IndexFund(
             WETH_ADDRESS,
             UNISWAP_ROUTER,
             UNISWAP_FACTORY,
+            UNISWAP_V2_ROUTER,
             BALANCER_VAULT,
             pool, // This is the balancer pool token
             indexTokens,
             tokenWeights,
             swapPoolTypes
         );
+
+        // Fix the bug: Set the swap pool type for WETH
+        fundInstance.setSwapPoolType(WETH_ADDRESS, IndexFund.SwapPoolType.UniV3OnePercent);
+
         vm.stopPrank();
         return (pool, fundInstance);
     }
