@@ -6,12 +6,23 @@ This project contains the IndexFund contract which facilitates minting and redee
 
 ## Codebase Overview
 
-The core of this project is the `IndexFund` contract (located in `src/IndexFund.sol`). This contract enables minting and redeeming fund shares using ETH. It swaps ETH for index tokens through Uniswap and then joins a Balancer pool with the acquired tokens. Redemption allows users to exit the Balancer pool and swap the underlying tokens back to ETH.
+The core of this project is the `IndexFund` contract (located in `src/IndexFund.sol`). This contract enables minting and redeeming fund shares using ETH. It swaps ETH for index tokens through Uniswap (supporting both V2 and V3) and then joins a Balancer pool with the acquired tokens. Redemption allows users to exit the Balancer pool and swap the underlying tokens back to WETH, which is then unwrapped to ETH.
+
+### Key Features
+
+- **Dual Uniswap Integration**: Supports both Uniswap V2 and V3 for optimal liquidity routing
+- **Configurable Swap Types**: Each token can be assigned a specific swap pool type:
+  - `UniV2`: Uses Uniswap V2 pools for tokens with better liquidity there
+  - `UniV3OnePercent`: Uses Uniswap V3 1% fee tier pools
+  - `UniV3PointThreePercent`: Uses Uniswap V3 0.3% fee tier pools
+- **Dynamic Fee Structure**: Customizable fee basis points for mint and redeem operations
+- **Slippage Protection**: Configurable slippage tolerance for swap operations
 
 Other important components include:
 
-- **Testing**: The test suite (`test/IndexFundTest.t.sol`) covers minting and redeeming functionalities and ensures proper interactions with external protocols.
-- **Deployment Script**: The deployment script (`script/Deployer.s.sol`) deploys the contract and integrates with external services like Etherscan for contract verification.
+- **Interfaces**: Contains interfaces for Balancer, Uniswap V2/V3, and WETH
+- **Testing**: The test suite (`test/IndexFundTest.t.sol`) covers minting, redeeming, and swap functionality
+- **Deployment Script**: The deployment script (`script/Deployer.s.sol`) deploys the contract with the proper configuration
 
 ---
 
@@ -27,6 +38,13 @@ $ forge build
 
 ```shell
 $ forge test
+```
+
+For specific tests:
+
+```shell
+$ forge test --match-test test_mint
+$ forge test --match-test test_redeem
 ```
 
 ### Format
@@ -65,6 +83,13 @@ Alternatively, if you want to check the deployment without broadcasting a transa
 make check_index_fund
 ```
 
+The deployment script:
+1. Uses hardcoded addresses for WETH, Uniswap routers, and Balancer vault
+2. Configures swap pool types for each token based on liquidity profiles
+3. Sets up token weights (default is even distribution)
+4. Uses an existing pool or creates a new one (configurable in the script)
+5. Deploys the IndexFund with the specified parameters
+
 Ensure that your environment has the variables loaded (see below).
 
 ---
@@ -73,8 +98,8 @@ Ensure that your environment has the variables loaded (see below).
 
 The deployment and scripts rely on the following environment variables. Refer to the `.env.example` file for details:
 
-- `RPC_URL`: The RPC URL of your Ethereum node (e.g., from Infura or Alchemy).
+- `RPC_URL`: The RPC URL of your Base 
 - `PRIVATE_KEY`: The private key used for deployment.
-- `ETHERSCAN_API_KEY`: The Etherscan API key for verifying contracts.
+- `ETHERSCAN_API_KEY`: The Etherscan API key for verifying contracts(BASE SCAN).
 
 ---

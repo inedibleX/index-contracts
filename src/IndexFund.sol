@@ -11,11 +11,10 @@ import {IUniswapV2Router} from "./interfaces/IUniswapV2.sol";
 import {IWETH} from "./interfaces/IWETH.sol";
 
 /// @title IndexFund
-/// @notice This contract facilitates the creation and redemption of fund shares
-/// by swapping ETH for a set of index tokens via Uniswap and joining/exiting a Balancer pool.
-/// @dev The contract interacts with Uniswap V3 for swaps and the Balancer Vault for pool management.
-/// Ensure that necessary token approvals are set.
+/// @notice Facilitates minting and redemption of fund shares by swapping ETH for index tokens and joining/exiting a Balancer pool.
+/// @dev Interacts with Uniswap V3/V2 for swaps and the Balancer Vault for pool management.
 contract IndexFund is ReentrancyGuard, Ownable {
+    /// @dev Types of swap pools available.
     enum SwapPoolType {
         None,
         UniV2,
@@ -23,8 +22,11 @@ contract IndexFund is ReentrancyGuard, Ownable {
         UniV3PointThreePercent
     }
 
-    // Contract state variables
+    // =============================================================
+    // State Variables
+    // =============================================================
 
+    // Immutable addresses
     address public immutable wethAddress;
     address public immutable uniswapV3Router;
     address public immutable uniswapV3Factory;
@@ -38,7 +40,7 @@ contract IndexFund is ReentrancyGuard, Ownable {
     uint256[] public tokenWeights;
     mapping(address => SwapPoolType) public swapPoolTypes;
 
-    // Swap configuration
+    // Swap configuration constants and parameters
     uint24 public constant DEFAULT_FEE_TIER = 10000; // 1%
     uint24 public constant DIVISOR = 10000;
     uint16 public slippageTolerance = 2000; // 20% default
@@ -46,37 +48,38 @@ contract IndexFund is ReentrancyGuard, Ownable {
     /// @notice Fee basis points for mint and redeem fees (default: 50 = 0.5%)
     uint256 public feeBasisPoints = 50;
 
+    // =============================================================
     // Events
+    // =============================================================
+
     /// @notice Emitted when a user mints fund shares.
-    /// @param user The address of the user.
-    /// @param ethAmount The amount of ETH deposited.
-    /// @param sharesIssued The number of shares issued.
     event Minted(address indexed user, uint256 ethAmount, uint256 sharesIssued);
 
     /// @notice Emitted when a user redeems fund shares.
-    /// @param user The address of the user.
-    /// @param sharesRedeemed The number of shares redeemed.
-    /// @param ethAmount The amount of ETH returned.
     event Redeemed(address indexed user, uint256 sharesRedeemed, uint256 ethAmount);
 
     /// @notice Emitted when the slippage tolerance is updated.
-    /// @param newSlippageTolerance The new slippage tolerance value.
     event SlippageToleranceUpdated(uint16 newSlippageTolerance);
 
     /// @notice Emitted when the fee basis points are updated.
-    /// @param newFeeBasisPoints The new fee basis points.
     event FeeUpdated(uint256 newFeeBasisPoints);
 
-    /// @notice Initializes the IndexFund contract.
-    /// @param _wethAddress The address of WETH.
-    /// @param _uniswapV3Router The Uniswap V3 router address.
-    /// @param _uniswapV3Factory The Uniswap V3 factory address.
-    /// @param _uniswapV2Router The Uniswap V2 router address.
-    /// @param _balancerVault The Balancer Vault address.
-    /// @param _balancerPoolToken The address of the Balancer pool token.
-    /// @param _indexTokens The addresses of the index tokens.
-    /// @param _tokenWeights The weights for the index tokens.
-    /// @param _swapPoolTypes The pool types for swapping each token.
+    // =============================================================
+    // Constructor
+    // =============================================================
+
+    /**
+     * @notice Initializes the IndexFund contract.
+     * @param _wethAddress The address of WETH.
+     * @param _uniswapV3Router The Uniswap V3 router address.
+     * @param _uniswapV3Factory The Uniswap V3 factory address.
+     * @param _uniswapV2Router The Uniswap V2 router address.
+     * @param _balancerVault The Balancer Vault address.
+     * @param _balancerPoolToken The address of the Balancer pool token.
+     * @param _indexTokens The addresses of the index tokens.
+     * @param _tokenWeights The weights for the index tokens.
+     * @param _swapPoolTypes The pool types for swapping each token.
+     */
     constructor(
         address _wethAddress,
         address _uniswapV3Router,
@@ -93,7 +96,6 @@ contract IndexFund is ReentrancyGuard, Ownable {
         uniswapV3Factory = _uniswapV3Factory;
         uniswapV2Router = _uniswapV2Router;
         balancerVault = _balancerVault;
-        // Retrieve the pool ID from the weighted pool contract
         balancerPoolId = IWeightedPool(_balancerPoolToken).getPoolId();
         // Although getPoolTokens is called, we override indexTokens with _indexTokens.
         (indexTokens,,) = IVault(_balancerVault).getPoolTokens(balancerPoolId);
@@ -102,177 +104,59 @@ contract IndexFund is ReentrancyGuard, Ownable {
         tokenWeights = _tokenWeights;
 
         for (uint256 i = 0; i < _indexTokens.length; i++) {
-            IERC20(_indexTokens[i]).approve(_uniswapV3Router, type(uint256).max);
-            IERC20(_indexTokens[i]).approve(_uniswapV2Router, type(uint256).max);
-            IERC20(_indexTokens[i]).approve(_balancerVault, type(uint256).max);
+            _approveTokenForSwaps(_indexTokens[i]);
             swapPoolTypes[_indexTokens[i]] = _swapPoolTypes[i];
         }
     }
 
-    /// @notice Mints pool tokens (BPT) by swapping ETH for index tokens and joining the Balancer pool.
-    /// @dev The ETH deposit is subject to a 0.5% fee. The remaining amount is divided equally among the index tokens for swapping. The pool tokens received are transferred directly to the sender.
+    // =============================================================
+    // External Functions
+    // =============================================================
+
+    /**
+     * @notice Mints pool tokens (BPT) by swapping ETH for index tokens and joining the Balancer pool.
+     * @dev Deducts a fee, splits the deposit among tokens, performs swaps, and transfers the received BPT to the sender.
+     */
     function mint() external payable nonReentrant {
-        // Calculate fee (0.5% of msg.value)
         uint256 feeAmount = (msg.value * feeBasisPoints) / DIVISOR;
         uint256 netDeposit = msg.value - feeAmount;
-
         uint256 swapAmount = netDeposit / indexTokens.length;
         uint256[] memory maxAmountsIn = new uint256[](indexTokens.length);
+
+        // Execute swaps for each index token
         for (uint256 i = 0; i < indexTokens.length; i++) {
-            uint256 amountOut = getQuote(wethAddress, indexTokens[i], uint128(swapAmount));
-            uint256 amountOutMinimum = amountOut * (DIVISOR - slippageTolerance) / DIVISOR;
-            maxAmountsIn[i] =
-                swapExactInputSingle(wethAddress, indexTokens[i], uint128(swapAmount), uint128(amountOutMinimum), true);
+            uint256 estimatedOut = getSwapQuote(wethAddress, indexTokens[i], uint128(swapAmount));
+            uint256 minOut = (estimatedOut * (DIVISOR - slippageTolerance)) / DIVISOR;
+            maxAmountsIn[i] = executeUniswapSwap(
+                wethAddress,
+                indexTokens[i],
+                uint128(swapAmount),
+                uint128(minOut),
+                true // is mint operation
+            );
         }
 
+        // Prepare assets for joining the Balancer pool
         IAsset[] memory assets = new IAsset[](indexTokens.length);
         for (uint256 i = 0; i < indexTokens.length; i++) {
             assets[i] = IAsset(indexTokens[i]);
         }
 
         uint256 poolBalanceBefore = IERC20(balancerPoolToken).balanceOf(address(this));
-        joinBalancerPool(assets, maxAmountsIn);
+        _joinBalancerPool(assets, maxAmountsIn);
         uint256 poolBalanceAfter = IERC20(balancerPoolToken).balanceOf(address(this));
         uint256 mintedPoolTokens = poolBalanceAfter - poolBalanceBefore;
 
         require(IERC20(balancerPoolToken).transfer(msg.sender, mintedPoolTokens), "Transfer of BPT failed");
 
         payable(owner()).transfer(feeAmount);
-
         emit Minted(msg.sender, netDeposit, mintedPoolTokens);
     }
 
-    /// @notice Swaps an input amount of a token for another token via Uniswap V3.
-    /// @dev The function sends ETH only if the swap is initiated during minting.
-    /// @param tokenIn The input token address.
-    /// @param tokenOut The output token address.
-    /// @param amountIn The amount of tokenIn to swap.
-    /// @param amountOutMinimum The minimum amount of tokenOut expected.
-    /// @param isMint A flag indicating if the swap is part of the mint process.
-    /// @return amountOut The amount of tokenOut received.
-    function swapExactInputSingle(
-        address tokenIn,
-        address tokenOut,
-        uint128 amountIn,
-        uint128 amountOutMinimum,
-        bool isMint
-    ) internal returns (uint256 amountOut) {
-        address token = isMint ? tokenOut : tokenIn;
-        SwapPoolType poolType = swapPoolTypes[token];
-
-        // For V2 swaps, use the dedicated V2 swap function
-        if (poolType == SwapPoolType.UniV2) {
-            return swapTokensV2(tokenIn, tokenOut, amountIn, amountOutMinimum, isMint);
-        }
-
-        // Else proceed with V3 swap
-        if (IERC20(tokenIn).allowance(address(this), uniswapV3Router) < amountIn) {
-            IERC20(tokenIn).approve(uniswapV3Router, type(uint256).max);
-        }
-
-        uint24 fee = poolType == SwapPoolType.UniV3OnePercent ? 10000 : 3000;
-
-        IUniswapV3Router.ExactInputSingleParams memory params = IUniswapV3Router.ExactInputSingleParams({
-            tokenIn: tokenIn,
-            tokenOut: tokenOut,
-            fee: fee,
-            recipient: address(this),
-            amountIn: amountIn,
-            amountOutMinimum: amountOutMinimum,
-            sqrtPriceLimitX96: 0
-        });
-
-        amountOut = IUniswapV3Router(uniswapV3Router).exactInputSingle{value: isMint ? amountIn : 0}(params);
-    }
-
     /**
-     * @notice Swap tokens using the Uniswap V2 Router
-     * @dev Used for tokens that have more liquidity in V2 pools
-     * @param tokenIn The input token address
-     * @param tokenOut The output token address
-     * @param amountIn The amount of input tokens
-     * @param amountOutMinimum The minimum expected output amount
-     * @param isMint Whether this is a mint operation (ETH → token) or a redeem operation (token → WETH)
-     * @return amountOut The amount of output tokens received
+     * @notice Redeems pool tokens (BPT) for ETH by exiting the Balancer pool and swapping tokens back to WETH.
+     * @param bptAmount The amount of Balancer pool tokens to redeem.
      */
-    function swapTokensV2(address tokenIn, address tokenOut, uint128 amountIn, uint128 amountOutMinimum, bool isMint)
-        internal
-        returns (uint256 amountOut)
-    {
-        // Create the token path for the swap
-        address[] memory path = new address[](2);
-        path[0] = tokenIn;
-        path[1] = tokenOut;
-
-        // Set deadline to a reasonable value in the future
-        uint256 deadline = block.timestamp + 15 minutes;
-
-        if (isMint) {
-            // Minting: ETH → token
-            require(tokenIn == wethAddress, "Expected WETH as input token for minting");
-
-            // No need to approve since we're sending ETH directly
-            uint256[] memory amounts = IUniswapV2Router(uniswapV2Router).swapExactETHForTokens{value: amountIn}(
-                amountOutMinimum, path, address(this), deadline
-            );
-
-            amountOut = amounts[amounts.length - 1];
-        } else {
-            // Redeeming: token → WETH (not ETH directly)
-            require(tokenOut == wethAddress, "Expected WETH as output token for redeeming");
-
-            // Approve the V2 router to spend our tokens
-            if (IERC20(tokenIn).allowance(address(this), uniswapV2Router) < amountIn) {
-                IERC20(tokenIn).approve(uniswapV2Router, type(uint256).max);
-            }
-
-            // Swap tokens for WETH (not directly to ETH)
-            uint256[] memory amounts = IUniswapV2Router(uniswapV2Router).swapExactTokensForTokens(
-                amountIn, amountOutMinimum, path, address(this), deadline
-            );
-
-            amountOut = amounts[amounts.length - 1];
-        }
-    }
-
-    /**
-     * @notice Get a quote for swapping tokens using Uniswap V2
-     * @param tokenIn The input token address
-     * @param tokenOut The output token address
-     * @param amountIn The amount of input tokens
-     * @return The estimated amount of output tokens
-     */
-    function getQuoteV2(address tokenIn, address tokenOut, uint128 amountIn) public view returns (uint256) {
-        address[] memory path = new address[](2);
-        path[0] = tokenIn;
-        path[1] = tokenOut;
-
-        uint256[] memory amounts = IUniswapV2Router(uniswapV2Router).getAmountsOut(amountIn, path);
-        return amounts[amounts.length - 1];
-    }
-
-    /// @notice Retrieves a quote for swapping tokens using the current Uniswap pool tick.
-    /// @param tokenIn The input token address.
-    /// @param tokenOut The output token address.
-    /// @param amountIn The amount of tokenIn.
-    /// @return The estimated amount of tokenOut obtainable.
-    function getQuote(address tokenIn, address tokenOut, uint128 amountIn) public view returns (uint256) {
-        // Check if the token should use V2 swaps
-        SwapPoolType poolType = swapPoolTypes[tokenOut];
-
-        if (poolType == SwapPoolType.UniV2) {
-            return getQuoteV2(tokenIn, tokenOut, amountIn);
-        }
-
-        // Otherwise use V3 quote logic
-        address pool = IUniswapV3Factory(uniswapV3Factory).getPool(tokenIn, tokenOut, DEFAULT_FEE_TIER);
-        require(pool != address(0), "Pool does not exist.");
-        (, int24 tick,,,,,) = IUniswapV3Pool(pool).slot0();
-        return OracleLibrary.getQuoteAtTick(tick, amountIn, tokenIn, tokenOut);
-    }
-
-    /// @notice Redeems pool tokens (BPT) for ETH by exiting the Balancer pool and swapping tokens back to WETH.
-    /// @param bptAmount The amount of Balancer pool tokens to redeem.
     function redeem(uint256 bptAmount) external nonReentrant {
         require(IERC20(balancerPoolToken).transferFrom(msg.sender, address(this), bptAmount), "Transfer of BPT failed");
 
@@ -286,41 +170,191 @@ contract IndexFund is ReentrancyGuard, Ownable {
             minAmountsOut[i] = 0;
         }
 
-        exitBalancerPool(bptAmount, tokens, minAmountsOut);
+        _exitBalancerPool(bptAmount, tokens, minAmountsOut);
 
-        uint256 totalWETH;
+        uint256 totalWETHReceived;
         for (uint256 i = 0; i < len; i++) {
             uint256 tokenBalance = IERC20(tokens[i]).balanceOf(address(this));
             if (tokenBalance > 0) {
                 if (tokens[i] == wethAddress) {
-                    totalWETH += tokenBalance;
+                    totalWETHReceived += tokenBalance;
                 } else {
-                    uint256 wethReceived = swapExactInputSingle(tokens[i], wethAddress, uint128(tokenBalance), 0, false);
-                    totalWETH += wethReceived;
+                    uint256 wethFromSwap = executeUniswapSwap(
+                        tokens[i],
+                        wethAddress,
+                        uint128(tokenBalance),
+                        0,
+                        false // not a mint operation
+                    );
+                    totalWETHReceived += wethFromSwap;
                 }
             }
         }
 
-        // Calculate redemption fee (0.5% of totalWETH)
-        uint256 feeOnRedeem = (totalWETH * feeBasisPoints) / DIVISOR;
-        uint256 netWETH = totalWETH - feeOnRedeem;
+        uint256 feeOnRedeem = (totalWETHReceived * feeBasisPoints) / DIVISOR;
+        uint256 netWETH = totalWETHReceived - feeOnRedeem;
 
         if (netWETH > 0) {
-            IWETH(wethAddress).withdraw(totalWETH);
+            IWETH(wethAddress).withdraw(totalWETHReceived);
         }
 
         (bool success,) = msg.sender.call{value: netWETH}("");
         require(success, "ETH transfer failed");
 
         payable(owner()).transfer(feeOnRedeem);
-
         emit Redeemed(msg.sender, bptAmount, netWETH);
     }
 
-    /// @notice Joins a Balancer pool with the provided assets and maximum token amounts.
-    /// @param assets The array of assets to join the pool with.
-    /// @param maxAmountsIn The corresponding maximum amounts for each asset.
-    function joinBalancerPool(IAsset[] memory assets, uint256[] memory maxAmountsIn) internal {
+    /**
+     * @notice Retrieves a quote for swapping tokens.
+     * @param tokenIn The input token.
+     * @param tokenOut The output token.
+     * @param amountIn The input amount.
+     * @return The estimated amount of output tokens.
+     */
+    function getSwapQuote(address tokenIn, address tokenOut, uint128 amountIn) public view returns (uint256) {
+        SwapPoolType poolType = swapPoolTypes[tokenOut];
+        if (poolType == SwapPoolType.UniV2) {
+            return getV2Quote(tokenIn, tokenOut, amountIn);
+        }
+        address pool = IUniswapV3Factory(uniswapV3Factory).getPool(tokenIn, tokenOut, DEFAULT_FEE_TIER);
+        require(pool != address(0), "Pool does not exist.");
+        (, int24 tick,,,,,) = IUniswapV3Pool(pool).slot0();
+        return OracleLibrary.getQuoteAtTick(tick, amountIn, tokenIn, tokenOut);
+    }
+
+    // =============================================================
+    // Admin Functions
+    // =============================================================
+
+    /**
+     * @notice Updates the slippage tolerance for swaps.
+     * @param newSlippageTolerance The new slippage tolerance.
+     */
+    function setSlippageTolerance(uint16 newSlippageTolerance) external onlyOwner {
+        slippageTolerance = newSlippageTolerance;
+        emit SlippageToleranceUpdated(newSlippageTolerance);
+    }
+
+    /**
+     * @notice Updates the fee basis points used for mint and redeem fees.
+     * @param newFeeBasisPoints The new fee basis points.
+     */
+    function setFeeBasisPoints(uint256 newFeeBasisPoints) external onlyOwner {
+        feeBasisPoints = newFeeBasisPoints;
+        emit FeeUpdated(newFeeBasisPoints);
+    }
+
+    /**
+     * @notice Updates the swap pool type for a given token.
+     * @param token The token address.
+     * @param newSwapPoolType The new swap pool type.
+     */
+    function setSwapPoolType(address token, SwapPoolType newSwapPoolType) external onlyOwner {
+        swapPoolTypes[token] = newSwapPoolType;
+    }
+
+    // =============================================================
+    // Internal Functions - Swaps & Pool Operations
+    // =============================================================
+
+    /**
+     * @dev Executes a swap using Uniswap V3 or V2 depending on the token's swap pool type.
+     * @param tokenIn The token to swap from.
+     * @param tokenOut The token to swap to.
+     * @param amountIn The input amount.
+     * @param amountOutMinimum The minimum acceptable output amount.
+     * @param isMintOperation True if the swap is part of a mint operation.
+     * @return amountOut The amount of token received.
+     */
+    function executeUniswapSwap(
+        address tokenIn,
+        address tokenOut,
+        uint128 amountIn,
+        uint128 amountOutMinimum,
+        bool isMintOperation
+    ) internal returns (uint256 amountOut) {
+        // Determine which pool type to use based on the token
+        address tokenForPool = isMintOperation ? tokenOut : tokenIn;
+        SwapPoolType poolType = swapPoolTypes[tokenForPool];
+
+        if (poolType == SwapPoolType.UniV2) {
+            return executeUniswapV2Swap(tokenIn, tokenOut, amountIn, amountOutMinimum, isMintOperation);
+        }
+
+        // Ensure sufficient allowance for Uniswap V3 router
+        if (IERC20(tokenIn).allowance(address(this), uniswapV3Router) < amountIn) {
+            IERC20(tokenIn).approve(uniswapV3Router, type(uint256).max);
+        }
+
+        uint24 fee = (poolType == SwapPoolType.UniV3OnePercent) ? 10000 : 3000;
+        IUniswapV3Router.ExactInputSingleParams memory params = IUniswapV3Router.ExactInputSingleParams({
+            tokenIn: tokenIn,
+            tokenOut: tokenOut,
+            fee: fee,
+            recipient: address(this),
+            amountIn: amountIn,
+            amountOutMinimum: amountOutMinimum,
+            sqrtPriceLimitX96: 0
+        });
+
+        amountOut = IUniswapV3Router(uniswapV3Router).exactInputSingle{value: isMintOperation ? amountIn : 0}(params);
+    }
+
+    /**
+     * @dev Executes a swap using the Uniswap V2 router.
+     * @param tokenIn The token to swap from.
+     * @param tokenOut The token to swap to.
+     * @param amountIn The input amount.
+     * @param amountOutMinimum The minimum acceptable output amount.
+     * @param isMintOperation True if the swap is part of a mint operation.
+     * @return amountOut The amount of token received.
+     */
+    function executeUniswapV2Swap(
+        address tokenIn,
+        address tokenOut,
+        uint128 amountIn,
+        uint128 amountOutMinimum,
+        bool isMintOperation
+    ) internal returns (uint256 amountOut) {
+        address[] memory path = new address[](2);
+        path[0] = tokenIn;
+        path[1] = tokenOut;
+        uint256 deadline = block.timestamp + 15 minutes;
+
+        if (isMintOperation) {
+            require(tokenIn == wethAddress, "Expected WETH for minting");
+            uint256[] memory amounts = IUniswapV2Router(uniswapV2Router).swapExactETHForTokens{value: amountIn}(
+                amountOutMinimum, path, address(this), deadline
+            );
+            amountOut = amounts[amounts.length - 1];
+        } else {
+            require(tokenOut == wethAddress, "Expected WETH for redeeming");
+            if (IERC20(tokenIn).allowance(address(this), uniswapV2Router) < amountIn) {
+                IERC20(tokenIn).approve(uniswapV2Router, type(uint256).max);
+            }
+            uint256[] memory amounts = IUniswapV2Router(uniswapV2Router).swapExactTokensForTokens(
+                amountIn, amountOutMinimum, path, address(this), deadline
+            );
+            amountOut = amounts[amounts.length - 1];
+        }
+    }
+
+    /**
+     * @dev Retrieves a quote using Uniswap V2.
+     */
+    function getV2Quote(address tokenIn, address tokenOut, uint128 amountIn) public view returns (uint256) {
+        address[] memory path = new address[](2);
+        path[0] = tokenIn;
+        path[1] = tokenOut;
+        uint256[] memory amounts = IUniswapV2Router(uniswapV2Router).getAmountsOut(amountIn, path);
+        return amounts[amounts.length - 1];
+    }
+
+    /**
+     * @dev Joins the Balancer pool with the provided assets and maximum token amounts.
+     */
+    function _joinBalancerPool(IAsset[] memory assets, uint256[] memory maxAmountsIn) internal {
         uint256 poolSupply = IERC20(balancerPoolToken).totalSupply();
         bytes memory userData;
 
@@ -344,16 +378,14 @@ contract IndexFund is ReentrancyGuard, Ownable {
         );
     }
 
-    /// @notice Exits the Balancer pool by redeeming a specified amount of BPT for underlying assets.
-    /// @param bptToRedeem The amount of Balancer pool tokens to redeem.
-    /// @param assets The addresses of the assets in the pool.
-    /// @param minAmountsOut The minimum amounts expected for each asset.
-    function exitBalancerPool(uint256 bptToRedeem, address[] memory assets, uint256[] memory minAmountsOut) internal {
+    /**
+     * @dev Exits the Balancer pool, redeeming BPT for underlying assets.
+     */
+    function _exitBalancerPool(uint256 bptToRedeem, address[] memory assets, uint256[] memory minAmountsOut) internal {
         IAsset[] memory iAssets = new IAsset[](assets.length);
         for (uint256 i = 0; i < assets.length; i++) {
             iAssets[i] = IAsset(assets[i]);
         }
-
         IVault(balancerVault).exitPool(
             balancerPoolId,
             address(this),
@@ -367,23 +399,18 @@ contract IndexFund is ReentrancyGuard, Ownable {
         );
     }
 
-    /// @notice Updates the slippage tolerance for swaps.
-    /// @param newSlippageTolerance The new slippage tolerance value.
-    function setSlippageTolerance(uint16 newSlippageTolerance) external onlyOwner {
-        slippageTolerance = newSlippageTolerance;
-        emit SlippageToleranceUpdated(newSlippageTolerance);
+    /**
+     * @dev Approves the necessary routers to spend a given token.
+     */
+    function _approveTokenForSwaps(address token) internal {
+        IERC20(token).approve(uniswapV3Router, type(uint256).max);
+        IERC20(token).approve(uniswapV2Router, type(uint256).max);
+        IERC20(token).approve(balancerVault, type(uint256).max);
     }
 
-    /// @notice Updates the fee basis points used for mint and redeem fees.
-    /// @param newFeeBasisPoints The new fee basis points (e.g. 50 for 0.5%).
-    function setFeeBasisPoints(uint256 newFeeBasisPoints) external onlyOwner {
-        feeBasisPoints = newFeeBasisPoints;
-        emit FeeUpdated(newFeeBasisPoints);
-    }
-
-    function setSwapPoolType(address token, SwapPoolType newSwapPoolType) external onlyOwner {
-        swapPoolTypes[token] = newSwapPoolType;
-    }
+    // =============================================================
+    // Fallback / Receive Functions
+    // =============================================================
 
     receive() external payable {}
 }
