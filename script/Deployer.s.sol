@@ -27,6 +27,16 @@ contract DeployIndexFund is Script {
         tokens[6] = 0xAC1Bd2486aAf3B5C0fc3Fd868558b082a531B2B4; // toshi
         tokens[7] = 0xB1a03EdA10342529bBF8EB700a06C60441fEf25d; // miggles
 
+        IndexFund.SwapPoolType[] memory swapPoolTypes = new IndexFund.SwapPoolType[](8);
+        swapPoolTypes[0] = IndexFund.SwapPoolType.UniV3OnePercent;
+        swapPoolTypes[1] = IndexFund.SwapPoolType.UniV3PointThreePercent;
+        swapPoolTypes[2] = IndexFund.SwapPoolType.UniV3OnePercent;
+        swapPoolTypes[3] = IndexFund.SwapPoolType.UniV3OnePercent;
+        swapPoolTypes[4] = IndexFund.SwapPoolType.UniV3PointThreePercent; // TODO: Change this to v2
+        swapPoolTypes[5] = IndexFund.SwapPoolType.UniV3OnePercent;
+        swapPoolTypes[6] = IndexFund.SwapPoolType.UniV3OnePercent;
+        swapPoolTypes[7] = IndexFund.SwapPoolType.UniV3PointThreePercent;
+
         // All token weights are 12.5% => 125e15 so that the sum equals 1e18.
         uint256[] memory weights = new uint256[](8);
         for (uint256 i = 0; i < 8; i++) {
@@ -54,8 +64,9 @@ contract DeployIndexFund is Script {
         );
 
         // Deploy the IndexFund contract passing the pool address as the pool token.
-        IndexFund fund =
-            new IndexFund(WETH_ADDRESS, UNISWAP_ROUTER, UNISWAP_FACTORY, BALANCER_VAULT, pool, tokens, weights);
+        IndexFund fund = new IndexFund(
+            WETH_ADDRESS, UNISWAP_ROUTER, UNISWAP_FACTORY, BALANCER_VAULT, pool, tokens, weights, swapPoolTypes
+        );
 
         console.log("Weighted pool deployed at:", pool);
         console.log("IndexFund deployed at:", address(fund));

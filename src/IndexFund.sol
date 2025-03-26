@@ -15,7 +15,15 @@ import {IWETH} from "./interfaces/IWETH.sol";
 /// @dev The contract interacts with Uniswap V3 for swaps and the Balancer Vault for pool management.
 /// Ensure that necessary token approvals are set.
 contract IndexFund is ReentrancyGuard, Ownable {
+    enum SwapPoolType {
+        None,
+        UniV2,
+        UniV3OnePercent,
+        UniV3PointThreePercent
+    }
+
     // Contract state variables
+
     address public immutable wethAddress;
     address public immutable uniswapRouter;
     address public immutable uniswapFactory;
@@ -26,6 +34,7 @@ contract IndexFund is ReentrancyGuard, Ownable {
     // Token configuration
     address[] public indexTokens;
     uint256[] public tokenWeights;
+    mapping(address => SwapPoolType) public swapPoolTypes;
 
     // Swap configuration
     uint24 public constant DEFAULT_FEE_TIER = 10000; // 1%
@@ -71,7 +80,8 @@ contract IndexFund is ReentrancyGuard, Ownable {
         address _balancerVault,
         address _balancerPoolToken,
         address[] memory _indexTokens,
-        uint256[] memory _tokenWeights
+        uint256[] memory _tokenWeights,
+        SwapPoolType[] memory _swapPoolTypes
     ) Ownable(msg.sender) {
         wethAddress = _wethAddress;
         uniswapRouter = _uniswapRouter;
@@ -88,6 +98,7 @@ contract IndexFund is ReentrancyGuard, Ownable {
         for (uint256 i = 0; i < _indexTokens.length; i++) {
             IERC20(_indexTokens[i]).approve(_uniswapRouter, type(uint256).max);
             IERC20(_indexTokens[i]).approve(_balancerVault, type(uint256).max);
+            swapPoolTypes[_indexTokens[i]] = _swapPoolTypes[i];
         }
     }
 
@@ -103,9 +114,8 @@ contract IndexFund is ReentrancyGuard, Ownable {
         for (uint256 i = 0; i < indexTokens.length; i++) {
             uint256 amountOut = getQuote(wethAddress, indexTokens[i], uint128(swapAmount));
             uint256 amountOutMinimum = amountOut * (DIVISOR - slippageTolerance) / DIVISOR;
-            maxAmountsIn[i] = swapExactInputSingle(
-                wethAddress, indexTokens[i], DEFAULT_FEE_TIER, uint128(swapAmount), uint128(amountOutMinimum), true
-            );
+            maxAmountsIn[i] =
+                swapExactInputSingle(wethAddress, indexTokens[i], uint128(swapAmount), uint128(amountOutMinimum), true);
         }
 
         IAsset[] memory assets = new IAsset[](indexTokens.length);
@@ -129,7 +139,6 @@ contract IndexFund is ReentrancyGuard, Ownable {
     /// @dev The function sends ETH only if the swap is initiated during minting.
     /// @param tokenIn The input token address.
     /// @param tokenOut The output token address.
-    /// @param fee The Uniswap fee tier.
     /// @param amountIn The amount of tokenIn to swap.
     /// @param amountOutMinimum The minimum amount of tokenOut expected.
     /// @param isMint A flag indicating if the swap is part of the mint process.
@@ -137,7 +146,6 @@ contract IndexFund is ReentrancyGuard, Ownable {
     function swapExactInputSingle(
         address tokenIn,
         address tokenOut,
-        uint24 fee,
         uint128 amountIn,
         uint128 amountOutMinimum,
         bool isMint
@@ -145,6 +153,8 @@ contract IndexFund is ReentrancyGuard, Ownable {
         if (IERC20(tokenIn).allowance(address(this), uniswapRouter) < amountIn) {
             IERC20(tokenIn).approve(uniswapRouter, type(uint256).max);
         }
+        address token = isMint ? tokenOut : tokenIn;
+        uint24 fee = swapPoolTypes[token] == SwapPoolType.UniV3OnePercent ? 10000 : 3000;
 
         IUniswapV3Router.ExactInputSingleParams memory params = IUniswapV3Router.ExactInputSingleParams({
             tokenIn: tokenIn,
@@ -195,8 +205,7 @@ contract IndexFund is ReentrancyGuard, Ownable {
                 if (tokens[i] == wethAddress) {
                     totalWETH += tokenBalance;
                 } else {
-                    uint256 wethReceived =
-                        swapExactInputSingle(tokens[i], wethAddress, DEFAULT_FEE_TIER, uint128(tokenBalance), 0, false);
+                    uint256 wethReceived = swapExactInputSingle(tokens[i], wethAddress, uint128(tokenBalance), 0, false);
                     totalWETH += wethReceived;
                 }
             }
@@ -280,6 +289,10 @@ contract IndexFund is ReentrancyGuard, Ownable {
     function setFeeBasisPoints(uint256 newFeeBasisPoints) external onlyOwner {
         feeBasisPoints = newFeeBasisPoints;
         emit FeeUpdated(newFeeBasisPoints);
+    }
+
+    function setSwapPoolType(address token, SwapPoolType newSwapPoolType) external onlyOwner {
+        swapPoolTypes[token] = newSwapPoolType;
     }
 
     receive() external payable {}

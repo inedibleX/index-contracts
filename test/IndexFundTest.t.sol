@@ -39,6 +39,7 @@ contract IndexFundTest is Test {
     address[] indexTokens;
     uint256[] tokenWeights;
     IndexTokens iTokens;
+    IndexFund.SwapPoolType[] swapPoolTypes;
 
     function setUp() public {
         // Fork Base mainnet with a specific, reliable RPC URL
@@ -101,6 +102,17 @@ contract IndexFundTest is Test {
         );
 
         vm.startPrank(owner);
+
+        swapPoolTypes = new IndexFund.SwapPoolType[](indexTokens.length);
+        swapPoolTypes[0] = IndexFund.SwapPoolType.UniV3OnePercent;
+        swapPoolTypes[1] = IndexFund.SwapPoolType.UniV3PointThreePercent;
+        swapPoolTypes[2] = IndexFund.SwapPoolType.UniV3OnePercent;
+        swapPoolTypes[3] = IndexFund.SwapPoolType.UniV3OnePercent;
+        swapPoolTypes[4] = IndexFund.SwapPoolType.UniV3PointThreePercent; // TODO: Change this to v2
+        swapPoolTypes[5] = IndexFund.SwapPoolType.UniV3OnePercent;
+        swapPoolTypes[6] = IndexFund.SwapPoolType.UniV3OnePercent;
+        swapPoolTypes[7] = IndexFund.SwapPoolType.UniV3PointThreePercent;
+
         // Create IndexFund with all required parameters
         fundInstance = new IndexFund(
             WETH_ADDRESS,
@@ -109,7 +121,8 @@ contract IndexFundTest is Test {
             BALANCER_VAULT,
             pool, // This is the balancer pool token
             indexTokens,
-            tokenWeights
+            tokenWeights,
+            swapPoolTypes
         );
         vm.stopPrank();
         return (pool, fundInstance);
@@ -228,5 +241,34 @@ contract IndexFundTest is Test {
         // We can't precisely predict the redeem fee amount since it depends on token swaps
         // But we can verify that the owner received some ETH
         assertGt(ownerBalanceAfter, ownerBalanceBefore, "Redeem fee was not sent to owner");
+    }
+
+    function test_setSwapPoolType() public {
+        (, IndexFund fundInstance) = _createWeightedPoolAndIndexFund();
+
+        // Check initial swap pool type for one of the tokens
+        address testToken = indexTokens[0];
+        IndexFund.SwapPoolType initialType = fundInstance.swapPoolTypes(testToken);
+        assertEq(
+            uint256(initialType), uint256(IndexFund.SwapPoolType.UniV3OnePercent), "Initial swap pool type incorrect"
+        );
+
+        // Test that owner can change swap pool type
+        vm.startPrank(owner);
+        fundInstance.setSwapPoolType(testToken, IndexFund.SwapPoolType.UniV3PointThreePercent);
+        vm.stopPrank();
+
+        // Verify the swap pool type was updated
+        IndexFund.SwapPoolType newType = fundInstance.swapPoolTypes(testToken);
+        assertEq(
+            uint256(newType),
+            uint256(IndexFund.SwapPoolType.UniV3PointThreePercent),
+            "Swap pool type not updated correctly"
+        );
+
+        // Test that non-owner cannot change swap pool type
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
+        fundInstance.setSwapPoolType(testToken, IndexFund.SwapPoolType.UniV2);
     }
 }
