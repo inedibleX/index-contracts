@@ -45,25 +45,26 @@ contract DeployIndexFund is Script {
         }
 
         // Swap fee: 0.0001e18
-        // uint256 swapFee = 0.0001e18;
+        uint256 swapFee = 0.0001e18;
 
-        // // Create a deterministic salt. Using the same salt as in the test.
-        // bytes32 salt = keccak256(abi.encodePacked("Base Meme Index", "BMI", "test_salt"));
+        // Create a deterministic salt. Using the same salt as in the test.
+        bytes32 salt = keccak256(abi.encodePacked("Equal-Weighted Meme Index", "EMI", "test_salt"));
 
-        // BalancerWeightedPoolDeployer poolDeployer = new BalancerWeightedPoolDeployer();
+        BalancerWeightedPoolDeployer poolDeployer = new BalancerWeightedPoolDeployer();
 
         // Create the weighted pool.
         // Note: This pool address will be used as the balancerPoolToken in IndexFund.
-        // address pool = poolDeployer.createWeightedPool(
-        //     "Base Meme Index",
-        //     "BMI",
-        //     tokens,
-        //     weights,
-        //     swapFee,
-        //     msg.sender, // setting the deployer as the owner of the pool
-        //     salt
-        // );
-        address pool = 0xB8931645216D8FF2B4D8323A6BBbEf9bD482DB35;
+        address pool = poolDeployer.createWeightedPool(
+            "Equal-Weighted Meme Index",
+            "EMI",
+            tokens,
+            weights,
+            swapFee,
+            msg.sender, // setting the deployer as the owner of the pool
+            salt
+        );
+
+        // address pool = 0xB8931645216D8FF2B4D8323A6BBbEf9bD482DB35;
 
         // Deploy the IndexFund contract passing the pool address as the pool token.
         IndexFund fund = new IndexFund(

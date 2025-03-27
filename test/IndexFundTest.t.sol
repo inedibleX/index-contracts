@@ -89,7 +89,26 @@ contract IndexFundTest is Test {
      */
     function _deployIndexFundWithPool() internal returns (address pool, IndexFund fundInstance) {
         // For testing purposes, the pool address is hard-coded.
-        pool = 0xB8931645216D8FF2B4D8323A6BBbEf9bD482DB35;
+        // pool = 0xB8931645216D8FF2B4D8323A6BBbEf9bD482DB35;
+        // Swap fee: 0.0001e18
+        uint256 swapFee = 0.0001e18;
+
+        // Create a deterministic salt. Using the same salt as in the test.
+        bytes32 salt = keccak256(abi.encodePacked("Equal-Weighted Meme Index", "EMI", "test_salt"));
+
+        BalancerWeightedPoolDeployer poolDeployer = new BalancerWeightedPoolDeployer();
+
+        // Create the weighted pool.
+        // Note: This pool address will be used as the balancerPoolToken in IndexFund.
+        pool = poolDeployer.createWeightedPool(
+            "Equal-Weighted Meme Index",
+            "EMI",
+            indexTokens,
+            tokenWeights,
+            swapFee,
+            msg.sender, // setting the deployer as the owner of the pool
+            salt
+        );
 
         vm.startPrank(owner);
         swapPoolTypes = new IndexFund.SwapPoolType[](indexTokens.length);
